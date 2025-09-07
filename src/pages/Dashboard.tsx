@@ -45,17 +45,7 @@ export default function Dashboard() {
   const todayInductions = useQuery(api.inductionDecisions.getTodayInductions);
   const activeAlerts = useQuery(api.alerts.getActiveAlerts);
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    return <Navigate to="/auth" replace />;
-  }
+  // moved loading/auth gating after hooks to maintain consistent hook order
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -93,6 +83,19 @@ export default function Dashboard() {
   });
 
   const [csvText, setCsvText] = useState("");
+
+  // Auth gating moved here so all hooks above are always called in the same order
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/auth" replace />;
+  }
 
   const handleCreateTrainset = async () => {
     try {
