@@ -18,6 +18,7 @@ import type * as auth_emailOtp from "../auth/emailOtp.js";
 import type * as auth from "../auth.js";
 import type * as http from "../http.js";
 import type * as inductionDecisions from "../inductionDecisions.js";
+import type * as ml from "../ml.js";
 import type * as seedData from "../seedData.js";
 import type * as trainsets from "../trainsets.js";
 import type * as users from "../users.js";
@@ -36,6 +37,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   http: typeof http;
   inductionDecisions: typeof inductionDecisions;
+  ml: typeof ml;
   seedData: typeof seedData;
   trainsets: typeof trainsets;
   users: typeof users;

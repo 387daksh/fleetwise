@@ -43,6 +43,16 @@ export const generateInductionRecommendations = mutation({
       throw new Error("Unauthorized");
     }
 
+    // Load optimization params (penalties)
+    const params = await ctx.db.query("optimizationParams").collect();
+    const getParamNumber = (name: string, fallback: number) => {
+      const found = params.find(p => p.parameterName === name);
+      const val = found?.value;
+      return (typeof val === "number" ? val : fallback);
+    };
+    const penaltyCert = getParamNumber("penalty_expiring_certificate", 50);
+    const penaltyHighJobs = getParamNumber("penalty_high_priority_jobs", 30);
+
     // Get all active trainsets
     const trainsets = await ctx.db
       .query("trainsets")
@@ -78,7 +88,7 @@ export const generateInductionRecommendations = mutation({
         .filter((q) => q.neq(q.field("status"), "closed"))
         .collect();
 
-      // Simple scoring algorithm
+      // Simple scoring algorithm (parameterized)
       let score = 100;
       const constraints: string[] = [];
       const conflicts: string[] = [];
@@ -90,7 +100,7 @@ export const generateInductionRecommendations = mutation({
 
       certificates.forEach(cert => {
         if (cert.validUntil < tomorrowTime) {
-          score -= 50;
+          score -= penaltyCert; // use param instead of hardcoded 50
           constraints.push(`${cert.certificateType} certificate expires soon`);
         }
       });
@@ -99,7 +109,7 @@ export const generateInductionRecommendations = mutation({
       if (openJobCards.length > 0) {
         const highPriorityJobs = openJobCards.filter(job => job.priority === "HIGH");
         if (highPriorityJobs.length > 0) {
-          score -= 30;
+          score -= penaltyHighJobs; // use param instead of hardcoded 30
           constraints.push(`${highPriorityJobs.length} high priority job cards open`);
         }
       }
