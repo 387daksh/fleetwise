@@ -124,3 +124,59 @@ export const getDashboardStats = query({
     return stats;
   },
 });
+
+export const bulkUpsertTrainsets = mutation({
+  args: {
+    rows: v.array(
+      v.object({
+        trainsetNumber: v.string(),
+        manufacturer: v.string(),
+        yearOfManufacture: v.number(),
+        currentLocation: v.string(),
+        totalMileage: v.optional(v.number()),
+        currentStatus: v.optional(v.string()),
+        isActive: v.optional(v.boolean()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (!user || (user.role !== "admin" && user.role !== "supervisor")) {
+      throw new Error("Unauthorized");
+    }
+
+    const results: Array<{ trainsetNumber: string; _id: any; action: "inserted" | "updated" }> = [];
+
+    for (const row of args.rows) {
+      const existing = await ctx.db
+        .query("trainsets")
+        .withIndex("by_trainset_number", (q) => q.eq("trainsetNumber", row.trainsetNumber))
+        .unique();
+
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          manufacturer: row.manufacturer,
+          yearOfManufacture: row.yearOfManufacture,
+          currentLocation: row.currentLocation,
+          ...(row.totalMileage !== undefined ? { totalMileage: row.totalMileage } : {}),
+          ...(row.currentStatus ? { currentStatus: row.currentStatus as any } : {}),
+          ...(row.isActive !== undefined ? { isActive: row.isActive } : {}),
+        });
+        results.push({ trainsetNumber: row.trainsetNumber, _id: existing._id, action: "updated" });
+      } else {
+        const _id = await ctx.db.insert("trainsets", {
+          trainsetNumber: row.trainsetNumber,
+          manufacturer: row.manufacturer,
+          yearOfManufacture: row.yearOfManufacture,
+          totalMileage: row.totalMileage ?? 0,
+          currentStatus: (row.currentStatus ?? "standby") as any,
+          currentLocation: row.currentLocation,
+          isActive: row.isActive ?? true,
+        });
+        results.push({ trainsetNumber: row.trainsetNumber, _id, action: "inserted" });
+      }
+    }
+
+    return results;
+  },
+});

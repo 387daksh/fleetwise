@@ -18,6 +18,25 @@ import {
   Users
 } from "lucide-react";
 import { toast } from "sonner";
+import { useMutation } from "convex/react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useState } from "react";
+
+type NewTrainsetForm = {
+  trainsetNumber: string;
+  manufacturer: string;
+  yearOfManufacture: string;
+  currentLocation: string;
+};
 
 export default function Dashboard() {
   const { isLoading, isAuthenticated, user } = useAuth();
@@ -55,6 +74,155 @@ export default function Dashboard() {
       case "medium": return "bg-yellow-100 text-yellow-800";
       case "low": return "bg-blue-100 text-blue-800";
       default: return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  const createTrainset = useMutation(api.trainsets.createTrainset);
+  const bulkUpsertTrainsets = useMutation(api.trainsets.bulkUpsertTrainsets);
+  const generateRecommendations = useMutation(api.inductionDecisions.generateInductionRecommendations);
+  const saveInductionDecisions = useMutation(api.inductionDecisions.saveInductionDecisions);
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+
+  const [newTrainset, setNewTrainset] = useState<NewTrainsetForm>({
+    trainsetNumber: "",
+    manufacturer: "",
+    yearOfManufacture: "",
+    currentLocation: "",
+  });
+
+  const [csvText, setCsvText] = useState("");
+
+  const handleCreateTrainset = async () => {
+    try {
+      if (
+        !newTrainset.trainsetNumber ||
+        !newTrainset.manufacturer ||
+        !newTrainset.yearOfManufacture ||
+        !newTrainset.currentLocation
+      ) {
+        toast("Please fill all fields.");
+        return;
+      }
+      await createTrainset({
+        trainsetNumber: newTrainset.trainsetNumber.trim(),
+        manufacturer: newTrainset.manufacturer.trim(),
+        yearOfManufacture: Number(newTrainset.yearOfManufacture),
+        currentLocation: newTrainset.currentLocation.trim(),
+      });
+      toast("Trainset created successfully.");
+      setAddOpen(false);
+      setNewTrainset({
+        trainsetNumber: "",
+        manufacturer: "",
+        yearOfManufacture: "",
+        currentLocation: "",
+      });
+    } catch (e: any) {
+      toast(e?.message ?? "Failed to create trainset.");
+    }
+  };
+
+  const handleGenerateRecommendations = async () => {
+    try {
+      const today = new Date().toISOString().split("T")[0];
+      const recs = await generateRecommendations({ date: today });
+      if (!recs || recs.length === 0) {
+        toast("No recommendations generated.");
+        return;
+      }
+      const decisions = recs.map((r: any, idx: number) => ({
+        trainsetId: r.trainsetId,
+        decision: r.decision,
+        priority: r.priority ?? idx + 1,
+        reasoning: r.reasoning ?? "",
+        constraints: Array.isArray(r.constraints) ? r.constraints : [],
+        conflictAlerts: Array.isArray(r.conflicts) ? r.conflicts : [],
+      }));
+      await saveInductionDecisions({ date: today, decisions });
+      toast("Recommendations generated and saved for today.");
+    } catch (e: any) {
+      toast(e?.message ?? "Failed to generate recommendations.");
+    }
+  };
+
+  const parseCsv = (text: string) => {
+    // Expecting headers: trainsetNumber,manufacturer,yearOfManufacture,currentLocation,totalMileage,currentStatus,isActive
+    const lines = text
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    if (lines.length === 0) return [];
+
+    const header = lines[0].split(",").map((h) => h.trim());
+    const idx = (key: string) => header.findIndex((h) => h.toLowerCase() === key.toLowerCase());
+
+    const idxTrainsetNumber = idx("trainsetNumber");
+    const idxManufacturer = idx("manufacturer");
+    const idxYear = idx("yearOfManufacture");
+    const idxLocation = idx("currentLocation");
+    const idxMileage = idx("totalMileage");
+    const idxStatus = idx("currentStatus");
+    const idxActive = idx("isActive");
+
+    const requiredMissing =
+      idxTrainsetNumber === -1 || idxManufacturer === -1 || idxYear === -1 || idxLocation === -1;
+    if (requiredMissing) {
+      throw new Error(
+        "CSV must include headers: trainsetNumber, manufacturer, yearOfManufacture, currentLocation",
+      );
+    }
+
+    const rows: Array<{
+      trainsetNumber: string;
+      manufacturer: string;
+      yearOfManufacture: number;
+      currentLocation: string;
+      totalMileage?: number;
+      currentStatus?: string;
+      isActive?: boolean;
+    }> = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",").map((c) => c.trim());
+      const row = {
+        trainsetNumber: cols[idxTrainsetNumber] ?? "",
+        manufacturer: cols[idxManufacturer] ?? "",
+        yearOfManufacture: Number(cols[idxYear] ?? ""),
+        currentLocation: cols[idxLocation] ?? "",
+        totalMileage: idxMileage !== -1 && cols[idxMileage] ? Number(cols[idxMileage]) : undefined,
+        currentStatus: idxStatus !== -1 && cols[idxStatus] ? cols[idxStatus] : undefined,
+        isActive:
+          idxActive !== -1 && cols[idxActive]
+            ? ["true", "1", "yes"].includes(cols[idxActive].toLowerCase())
+            : undefined,
+      };
+
+      if (!row.trainsetNumber || !row.manufacturer || !row.yearOfManufacture || !row.currentLocation) {
+        continue;
+      }
+      rows.push(row);
+    }
+
+    return rows;
+  };
+
+  const handleBulkUpload = async () => {
+    try {
+      const rows = parseCsv(csvText);
+      if (rows.length === 0) {
+        toast("No valid rows found in CSV.");
+        return;
+      }
+      const result = await bulkUpsertTrainsets({ rows });
+      const inserted = result.filter((r) => r.action === "inserted").length;
+      const updated = result.filter((r) => r.action === "updated").length;
+      toast(`Processed ${result.length} trainsets (${inserted} inserted, ${updated} updated).`);
+      setBulkOpen(false);
+      setCsvText("");
+    } catch (e: any) {
+      toast(e?.message ?? "Failed to process CSV.");
     }
   };
 
@@ -194,7 +362,7 @@ export default function Dashboard() {
                   <div className="text-center py-8">
                     <Calendar className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                     <p className="text-gray-600">No induction decisions for today</p>
-                    <Button className="mt-4" variant="outline">
+                    <Button className="mt-4" variant="outline" onClick={handleGenerateRecommendations}>
                       Generate Recommendations
                     </Button>
                   </div>
@@ -279,9 +447,102 @@ export default function Dashboard() {
                   <CardTitle>Quick Actions</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <Button className="w-full justify-start" variant="outline">
-                    Add New Trainset
-                  </Button>
+                  <Dialog open={addOpen} onOpenChange={setAddOpen}>
+                    <DialogTrigger asChild>
+                      <Button className="w-full justify-start" variant="outline">
+                        Add New Trainset
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-lg">
+                      <DialogHeader>
+                        <DialogTitle>Add Trainset</DialogTitle>
+                      </DialogHeader>
+                      <div className="grid gap-4 py-2">
+                        <div className="grid gap-2">
+                          <Label>Trainset Number</Label>
+                          <Input
+                            value={newTrainset.trainsetNumber}
+                            onChange={(e) =>
+                              setNewTrainset((s: NewTrainsetForm) => ({ ...s, trainsetNumber: e.target.value }))
+                            }
+                            placeholder="KM-001"
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>Manufacturer</Label>
+                          <Input
+                            value={newTrainset.manufacturer}
+                            onChange={(e) => setNewTrainset((s: NewTrainsetForm) => ({ ...s, manufacturer: e.target.value }))}
+                            placeholder="Alstom"
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>Year of Manufacture</Label>
+                          <Input
+                            type="number"
+                            value={newTrainset.yearOfManufacture}
+                            onChange={(e) =>
+                              setNewTrainset((s: NewTrainsetForm) => ({ ...s, yearOfManufacture: e.target.value }))
+                            }
+                            placeholder="2019"
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>Current Location</Label>
+                          <Input
+                            value={newTrainset.currentLocation}
+                            onChange={(e) =>
+                              setNewTrainset((s: NewTrainsetForm) => ({ ...s, currentLocation: e.target.value }))
+                            }
+                            placeholder="Aluva Depot"
+                          />
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button variant="outline" onClick={() => setAddOpen(false)}>
+                          Cancel
+                        </Button>
+                        <Button onClick={handleCreateTrainset}>Create</Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+
+                  <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+                    <DialogTrigger asChild>
+                      <Button className="w-full justify-start" variant="outline">
+                        Bulk Upload Trainsets (CSV)
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-3xl">
+                      <DialogHeader>
+                        <DialogTitle>Bulk Upload via CSV</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-3">
+                        <p className="text-sm text-gray-600">
+                          Export your Excel as CSV and paste here. Required headers:
+                          trainsetNumber, manufacturer, yearOfManufacture, currentLocation
+                          Optional: totalMileage, currentStatus (active|standby|maintenance|out_of_service), isActive
+                        </p>
+                        <div className="rounded-md border">
+                          <textarea
+                            className="w-full h-60 p-3 outline-none bg-white"
+                            placeholder={`trainsetNumber,manufacturer,yearOfManufacture,currentLocation,totalMileage,currentStatus,isActive
+KM-026,Alstom,2019,Aluva Depot,75000,active,true
+KM-027,BEML,2020,Petta Depot,52000,standby,true`}
+                            value={csvText}
+                            onChange={(e) => setCsvText(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button variant="outline" onClick={() => setBulkOpen(false)}>
+                          Cancel
+                        </Button>
+                        <Button onClick={handleBulkUpload}>Process CSV</Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+
                   <Button className="w-full justify-start" variant="outline">
                     Update Fitness Certificate
                   </Button>
